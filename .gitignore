@@ -1,0 +1,41 @@
+# 실행 파일
+*.exe
+*.out
+puyo_puyo
+puyo_puyo.exe
+
+# 컴파일러 생성 파일
+*.o
+*.obj
+*.dll
+*.so
+*.dylib
+
+# 디버그 파일
+*.pdb
+*.ilk
+
+# Visual Studio Code 개인 설정
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/*.log
+
+# OS별 파일
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*~
+
+# Build 디렉토리
+build/
+bin/
+obj/
+debug/
+release/
+
+# 백업 파일
+*~
+*.bak
+*.orig
