@@ -5,13 +5,29 @@
 #include <random>
 #include <ctime>
 #include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 using namespace std;
+
+// ---- 자주 사용하는 색상 상수 정의 ----
+const sf::Color GRAY(128, 128, 128);
+const sf::Color DARK_GRAY(64, 64, 64);
+const sf::Color LIGHT_GRAY(192, 192, 192);
+const sf::Color ORANGE(255, 165, 0);
+const sf::Color DARK_GREEN(0, 128, 0);
+const sf::Color DARK_BLUE(0, 0, 128);
+const sf::Color PINK(255, 192, 203);
 
 // ---- 기본 상수 ----
 static const int COLS = 6;     // 가로 칸 수 (뿌요뿌요 기본은 6)
 static const int ROWS = 12;    // 세로 칸 수 (기본은 12)
 static const int CELL = 32;    // 셀 하나의 픽셀 크기
+static const int WINDOW_WIDTH = COLS * CELL + 200; // 점수 표시를 위한 추가 공간
+static const int WINDOW_HEIGHT = ROWS * CELL;
+
+// 게임 상태
+enum GameState { MENU, PLAYING, GAME_OVER };
 
 // 셀의 상태 (빈칸 또는 색상)
 enum Color { EMPTY=0, RED, GREEN, BLUE, YELLOW, PURPLE, COLOR_COUNT };
@@ -46,13 +62,14 @@ struct Board {
     array<array<Color, COLS>, ROWS> g{}; // 그리드 (ROWS x COLS)
     int score = 0;  // 점수
     int chain = 0;  // 현재 연쇄 수
+    int level = 1;  // 레벨
 
     Board(){ clear(); }
 
     // 보드 초기화
     void clear(){
         for(int y=0;y<ROWS;++y) for(int x=0;x<COLS;++x) g[y][x]=EMPTY;
-        score=0; chain=0;
+        score=0; chain=0; level=1;
     }
 
     // 특정 위치가 비어있는지 체크
@@ -73,8 +90,14 @@ struct Board {
 
     // 조각을 보드에 고정
     void lock(const PuyoPair& p){
-        g[p.pivot.y][p.pivot.x] = p.c1;
-        g[p.pivot.y + p.sub.y][p.pivot.x + p.sub.x] = p.c2;
+        if(inBounds(p.pivot.x, p.pivot.y)) {
+            g[p.pivot.y][p.pivot.x] = p.c1;
+        }
+        int sx = p.pivot.x + p.sub.x;
+        int sy = p.pivot.y + p.sub.y;
+        if(inBounds(sx, sy)) {
+            g[sy][sx] = p.c2;
+        }
     }
 
     // 중력 처리 (위의 뿌요가 아래로 떨어짐)
@@ -93,7 +116,6 @@ struct Board {
     }
 
     // 4개 이상 연결된 뿌요들을 찾아서 제거
-    // chainIndex는 몇 연쇄째인지
     int popGroupsAndScore(int chainIndex){
         vector<vector<bool>> vis(ROWS, vector<bool>(COLS,false));
         int removedTotal = 0;
@@ -132,8 +154,12 @@ struct Board {
 
         // 점수 계산
         if(removedTotal>0){
-            // 간단한 체인 보너스: 40 * 연쇄수 + 제거한 수치당 10점
-            score += 40 * chainIndex + removedTotal*10;
+            int chainBonus = chainIndex * chainIndex * 50; // 연쇄 보너스
+            int popBonus = removedTotal * 10; // 제거 보너스
+            score += chainBonus + popBonus;
+            
+            // 레벨업 (1000점마다)
+            level = (score / 1000) + 1;
         }
         return removedTotal;
     }
@@ -158,7 +184,7 @@ bool wallKick(Board& b, PuyoPair& p){
 // 새 조각 생성 (보드 위쪽에서 등장)
 PuyoPair makeSpawnPair(){
     PuyoPair p;
-    p.pivot = { COLS/2, 0 };   // 가운데 위에서 시작
+    p.pivot = { COLS/2, 1 };   // 가운데에서 시작 (한 칸 아래로 수정)
     p.sub   = { 0, -1 };       // pivot 위쪽에 붙어 있음
     p.c1 = randomColor();
     p.c2 = randomColor();
@@ -172,25 +198,52 @@ bool canMove(Board& b, const PuyoPair& p, int dx, int dy){
     return !b.collision(t);
 }
 
+// 색상을 SFML Color로 변환
+sf::Color getColor(Color c) {
+    switch(c) {
+        case RED:    return sf::Color(220,60,60);
+        case GREEN:  return sf::Color(60,200,80);
+        case BLUE:   return sf::Color(70,120,240);
+        case YELLOW: return sf::Color(220,200,60);
+        case PURPLE: return sf::Color(160,70,200);
+        case EMPTY:  return sf::Color(20,20,20);
+        default:     return sf::Color::White;
+    }
+}
+
 int main(){
-    sf::RenderWindow window(sf::VideoMode(COLS*CELL, ROWS*CELL), "Puyo Puyo (Minimal)");
+    sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "Puyo Puyo Game");
     window.setFramerateLimit(60);
 
+    // 폰트 로드 (시스템 기본 폰트 사용)
+    sf::Font font;
+    // 폰트가 없어도 게임이 돌아가도록 처리
+    bool fontLoaded = font.loadFromFile("arial.ttf"); // Windows 기본 폰트
+    if(!fontLoaded) {
+        // 다른 경로 시도
+        fontLoaded = font.loadFromFile("C:/Windows/Fonts/arial.ttf");
+    }
+
     Board board;
+    GameState gameState = MENU;
 
     // 사각형(블록 하나) 템플릿
     sf::RectangleShape tile(sf::Vector2f((float)CELL-1, (float)CELL-1));
 
     // 현재 조각 & 게임 상태
     PuyoPair cur = makeSpawnPair();
+    PuyoPair nextPair = makeSpawnPair(); // 다음 조각
     bool alive = true;
 
     // 낙하 속도 제어
     float fallTimer = 0.f;
-    float fallInterval = 0.5f; // 기본 낙하 간격(초)
+    float fallInterval = 1.0f; // 기본 낙하 간격(초)
 
-    // 좌우 이동 입력 딜레이 방지용
-    float moveCooldown=0.f, moveDelay=0.1f;
+    // 입력 딜레이 방지용
+    float moveCooldown = 0.f;
+    float rotateCooldown = 0.f;
+    const float moveDelay = 0.15f;
+    const float rotateDelay = 0.2f;
 
     sf::Clock clock;
 
@@ -198,8 +251,10 @@ int main(){
     auto resetGame = [&](){
         board.clear();
         cur = makeSpawnPair();
+        nextPair = makeSpawnPair();
         alive = true;
-        fallTimer=0; board.chain=0; board.score=0;
+        fallTimer = 0;
+        gameState = PLAYING;
     };
 
     // 메인 루프
@@ -210,128 +265,226 @@ int main(){
         sf::Event e;
         while(window.pollEvent(e)){
             if(e.type == sf::Event::Closed) window.close();
+            
             if(e.type == sf::Event::KeyPressed){
-                if(e.key.code == sf::Keyboard::R) resetGame();
+                if(gameState == MENU) {
+                    if(e.key.code == sf::Keyboard::Space || e.key.code == sf::Keyboard::Return) {
+                        resetGame();
+                    }
+                } else if(gameState == GAME_OVER) {
+                    if(e.key.code == sf::Keyboard::R) {
+                        resetGame();
+                    } else if(e.key.code == sf::Keyboard::Escape) {
+                        gameState = MENU;
+                    }
+                } else if(gameState == PLAYING) {
+                    if(e.key.code == sf::Keyboard::Escape) {
+                        gameState = MENU;
+                    }
+                }
             }
         }
 
-        // 입력 처리
-        moveCooldown -= dt;
-        if(alive){
-            if(moveCooldown<=0.f){
-                if(sf::Keyboard::isKeyPressed(sf::Keyboard::Left)){
-                    if(canMove(board, cur, -1, 0)){ cur.pivot.x -= 1; moveCooldown=moveDelay; }
-                }else if(sf::Keyboard::isKeyPressed(sf::Keyboard::Right)){
-                    if(canMove(board, cur, +1, 0)){ cur.pivot.x += 1; moveCooldown=moveDelay; }
+        // 게임 로직 (PLAYING 상태에서만 실행)
+        if(gameState == PLAYING && alive) {
+            // 입력 처리 - 쿨다운 적용
+            moveCooldown -= dt;
+            rotateCooldown -= dt;
+
+            if(moveCooldown <= 0.f) {
+                if(sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
+                    if(canMove(board, cur, -1, 0)) {
+                        cur.pivot.x -= 1;
+                        moveCooldown = moveDelay;
+                    }
+                } else if(sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
+                    if(canMove(board, cur, +1, 0)) {
+                        cur.pivot.x += 1;
+                        moveCooldown = moveDelay;
+                    }
                 }
             }
 
-            // 소프트 드랍
-            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Down)){
-                if(canMove(board, cur, 0, +1)){ cur.pivot.y += 1; fallTimer=0; }
-            }
-
-            // 회전
-            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Up)){
-                // 시계 회전
-                PuyoPair t = cur; t.sub = rotateCW(t.sub);
-                if(board.collision(t)){
-                    // 월킥 실패 시 반시계도 시도
-                    if(!wallKick(board, t)){
-                        t = cur; t.sub = rotateCCW(t.sub);
-                        if(board.collision(t)) wallKick(board, t);
+            // 회전 (쿨다운 적용)
+            if(rotateCooldown <= 0.f && sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
+                PuyoPair t = cur;
+                t.sub = rotateCW(t.sub);
+                if(board.collision(t)) {
+                    if(!wallKick(board, t)) {
+                        t = cur;
+                        t.sub = rotateCCW(t.sub);
+                        wallKick(board, t);
                     }
                 }
                 cur = t;
+                rotateCooldown = rotateDelay;
             }
-        }
 
-        // 자동 낙하
-        if(alive){
+            // 자동 낙하
             fallTimer += dt;
-            float curInterval = fallInterval;
-            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) curInterval = 0.05f; // 빠른 하강
+            float curInterval = fallInterval / (1.0f + board.level * 0.1f); // 레벨에 따른 속도 증가
+            
+            // 소프트 드랍
+            if(sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
+                curInterval = 0.05f;
+            }
 
-            if(fallTimer >= curInterval){
+            if(fallTimer >= curInterval) {
                 fallTimer = 0.f;
-                if(canMove(board, cur, 0, +1)){
-                    // 한 칸 아래로
+                
+                if(canMove(board, cur, 0, +1)) {
                     cur.pivot.y += 1;
-                }else{
-                    // 더 내려갈 수 없으면 보드에 고정
-                    int subY = cur.pivot.y + cur.sub.y;
-                    if(cur.pivot.y < 0 || subY < 0){
-                        // 보드 밖이면 게임오버
-                        alive=false;
-                    }else{
-                        board.lock(cur);
+                } else {
+                    // 보드에 고정
+                    board.lock(cur);
 
-                        // 연쇄 처리
-                        int chainIndex = 1;
-                        while(true){
-                            int removed = board.popGroupsAndScore(chainIndex);
-                            if(removed<=0) break;     // 더 이상 제거할 그룹 없음
-                            board.applyGravity();     // 위에 있는 뿌요 내려주기
-                            chainIndex++;
-                        }
+                    // 연쇄 처리
+                    int chainIndex = 1;
+                    bool hadChain = false;
+                    while(true) {
+                        int removed = board.popGroupsAndScore(chainIndex);
+                        if(removed <= 0) break;
+                        hadChain = true;
+                        board.applyGravity();
+                        chainIndex++;
+                    }
 
-                        // 새 조각 소환
-                        cur = makeSpawnPair();
-                        if(board.collision(cur)){
-                            alive=false; // 스폰하자마자 막히면 게임오버
-                        }
+                    // 다음 조각으로 교체
+                    cur = nextPair;
+                    nextPair = makeSpawnPair();
+
+                    // 게임오버 체크
+                    if(board.collision(cur)) {
+                        alive = false;
+                        gameState = GAME_OVER;
                     }
                 }
             }
         }
-
-        // 난이도 상승: 시간이 지날수록 낙하속도 빨라짐
-        fallInterval = std::max(0.12f, fallInterval - dt*0.0008f);
 
         // ----- 렌더링 -----
-        window.clear();
+        window.clear(sf::Color::Black);
 
-        // 보드 그리기
-        for(int y=0;y<ROWS;++y){
-            for(int x=0;x<COLS;++x){
-                if(board.g[y][x]==EMPTY){
-                    tile.setFillColor(sf::Color(20,20,20)); // 빈칸은 어둡게
-                }else{
-                    // 색상에 맞게 출력
-                    switch(board.g[y][x]){
-                        case RED:    tile.setFillColor(sf::Color(220,60,60)); break;
-                        case GREEN:  tile.setFillColor(sf::Color(60,200,80)); break;
-                        case BLUE:   tile.setFillColor(sf::Color(70,120,240)); break;
-                        case YELLOW: tile.setFillColor(sf::Color(220,200,60)); break;
-                        case PURPLE: tile.setFillColor(sf::Color(160,70,200)); break;
-                        default: tile.setFillColor(sf::Color::White); break;
-                    }
-                }
-                tile.setPosition((float)x*CELL+0.5f, (float)y*CELL+0.5f);
-                window.draw(tile);
+        if(gameState == MENU) {
+            // 메뉴 화면
+            if(fontLoaded) {
+                sf::Text title("PUYO PUYO", font, 48);
+                title.setFillColor(sf::Color::White);
+                title.setPosition(WINDOW_WIDTH/2 - title.getGlobalBounds().width/2, 100);
+                window.draw(title);
+
+                sf::Text start("Press SPACE or ENTER to Start", font, 24);
+                start.setFillColor(sf::Color::Yellow);
+                start.setPosition(WINDOW_WIDTH/2 - start.getGlobalBounds().width/2, 200);
+                window.draw(start);
+
+                sf::Text controls1("Controls:", font, 20);
+                controls1.setFillColor(sf::Color::Cyan);
+                controls1.setPosition(50, 280);
+                window.draw(controls1);
+
+                sf::Text controls2("Left/Right Arrow: Move", font, 16);
+                controls2.setFillColor(sf::Color::White);
+                controls2.setPosition(50, 310);
+                window.draw(controls2);
+
+                sf::Text controls3("Up Arrow: Rotate", font, 16);
+                controls3.setFillColor(sf::Color::White);
+                controls3.setPosition(50, 330);
+                window.draw(controls3);
+
+                sf::Text controls4("Down Arrow: Soft Drop", font, 16);
+                controls4.setFillColor(sf::Color::White);
+                controls4.setPosition(50, 350);
+                window.draw(controls4);
             }
-        }
+        } else if(gameState == GAME_OVER) {
+            // 게임오버 화면
+            if(fontLoaded) {
+                sf::Text gameOver("GAME OVER", font, 48);
+                gameOver.setFillColor(sf::Color::Red);
+                gameOver.setPosition(WINDOW_WIDTH/2 - gameOver.getGlobalBounds().width/2, 150);
+                window.draw(gameOver);
 
-        // 현재 조각 그리기
-        if(alive){
-            auto drawCell = [&](int x,int y, Color c){
-                if(!inBounds(x,y)) return;
-                switch(c){
-                    case RED:    tile.setFillColor(sf::Color(220,60,60)); break;
-                    case GREEN:  tile.setFillColor(sf::Color(60,200,80)); break;
-                    case BLUE:   tile.setFillColor(sf::Color(70,120,240)); break;
-                    case YELLOW: tile.setFillColor(sf::Color(220,200,60)); break;
-                    case PURPLE: tile.setFillColor(sf::Color(160,70,200)); break;
-                    default: tile.setFillColor(sf::Color(180,180,180)); break;
+                sf::Text finalScore("Final Score: " + to_string(board.score), font, 24);
+                finalScore.setFillColor(sf::Color::White);
+                finalScore.setPosition(WINDOW_WIDTH/2 - finalScore.getGlobalBounds().width/2, 220);
+                window.draw(finalScore);
+
+                sf::Text restart("Press R to Restart", font, 20);
+                restart.setFillColor(sf::Color::Yellow);
+                restart.setPosition(WINDOW_WIDTH/2 - restart.getGlobalBounds().width/2, 280);
+                window.draw(restart);
+
+                sf::Text menu("Press ESC for Menu", font, 20);
+                menu.setFillColor(sf::Color::Yellow);
+                menu.setPosition(WINDOW_WIDTH/2 - menu.getGlobalBounds().width/2, 310);
+                window.draw(menu);
+            }
+        } else {
+            // 게임 플레이 화면
+            // 보드 그리기
+            for(int y=0; y<ROWS; ++y) {
+                for(int x=0; x<COLS; ++x) {
+                    tile.setFillColor(getColor(board.g[y][x]));
+                    tile.setPosition((float)x*CELL+0.5f, (float)y*CELL+0.5f);
+                    window.draw(tile);
                 }
-                tile.setPosition((float)x*CELL+0.5f, (float)y*CELL+0.5f);
-                window.draw(tile);
-            };
-            drawCell(cur.pivot.x, cur.pivot.y, cur.c1);
-            drawCell(cur.pivot.x + cur.sub.x, cur.pivot.y + cur.sub.y, cur.c2);
+            }
+
+            // 현재 조각 그리기
+            if(alive) {
+                auto drawPuyo = [&](int x, int y, Color c) {
+                    if(inBounds(x, y)) {
+                        tile.setFillColor(getColor(c));
+                        tile.setPosition((float)x*CELL+0.5f, (float)y*CELL+0.5f);
+                        window.draw(tile);
+                    }
+                };
+                
+                drawPuyo(cur.pivot.x, cur.pivot.y, cur.c1);
+                drawPuyo(cur.pivot.x + cur.sub.x, cur.pivot.y + cur.sub.y, cur.c2);
+            }
+
+            // UI 정보 (오른쪽 패널)
+            if(fontLoaded) {
+                int uiX = COLS * CELL + 10;
+                
+                sf::Text scoreText("Score: " + to_string(board.score), font, 16);
+                scoreText.setFillColor(sf::Color::White);
+                scoreText.setPosition(uiX, 50);
+                window.draw(scoreText);
+
+                sf::Text levelText("Level: " + to_string(board.level), font, 16);
+                levelText.setFillColor(sf::Color::White);
+                levelText.setPosition(uiX, 80);
+                window.draw(levelText);
+
+                // 다음 조각 미리보기
+                sf::Text nextText("Next:", font, 14);
+                nextText.setFillColor(sf::Color::Cyan);
+                nextText.setPosition(uiX, 120);
+                window.draw(nextText);
+
+                // 작은 타일로 다음 조각 그리기
+                sf::RectangleShape smallTile(sf::Vector2f(16, 16));
+                smallTile.setFillColor(getColor(nextPair.c1));
+                smallTile.setPosition(uiX + 10, 150);
+                window.draw(smallTile);
+
+                smallTile.setFillColor(getColor(nextPair.c2));
+                smallTile.setPosition(uiX + 10, 170);
+                window.draw(smallTile);
+
+                sf::Text escText("ESC: Menu", font, 12);
+                escText.setFillColor(GRAY); // 정의된 상수 사용
+                escText.setPosition(uiX, WINDOW_HEIGHT - 30);
+                window.draw(escText);
+            }
         }
 
         window.display();
     }
+    
     return 0;
 }
