@@ -55,13 +55,39 @@
   <img src="https://github.com/user-attachments/assets/8f761123-c736-4909-8f34-50b49eb2e386" alt="Puyo_3" width="250"/>
 </p>
 
-
 ---
 
-# 실행 방법 | 実行方法 | How to Run
- ```bash g++ src/main.cpp -o puyo -lsfml-graphics -lsfml-window -lsfml-system
+## ⚙️ 실행 방법 | 実行方法 | How to Run
+
+### 1. 개발 환경 준비 | 開発環境準備 | Setup Environment
+
+* [MSYS2](https://www.msys2.org/) 설치
+* MINGW64 환경 실행 후 다음 패키지 설치:
+
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-sfml
+```
+
+### 2. 저장소 클론 | リポジトリのクローン | Clone Repository
+
+```bash
+git clone https://github.com/Gyu1234/Puyo_Game.git
+cd Puyo_Game
+```
+
+### 3. 빌드 | ビルド | Build
+
+```bash
+g++ src/main.cpp -o puyo -lsfml-graphics -lsfml-window -lsfml-system
+```
+
+### 4. 실행 | 実行 | Run
+
+```bash
 ./puyo
 ```
+
+➡️ **주의 | 注意 | Note**: 위 명령어는 반드시 **MSYS2 MINGW64 터미널**에서 실행해야 정상 동작합니다.
 
 ---
 
