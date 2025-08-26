@@ -56,10 +56,10 @@
 </p>
 
 
+---
 
-```bash
 # 실행 방법 | 実行方法 | How to Run
-g++ src/main.cpp -o puyo -lsfml-graphics -lsfml-window -lsfml-system
+ ```bash g++ src/main.cpp -o puyo -lsfml-graphics -lsfml-window -lsfml-system
 ./puyo
 ```
 
