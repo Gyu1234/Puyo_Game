@@ -1,55 +1,71 @@
-# 📌 Puyo Game (ぷよぷよクローンプロジェクト / Puyo Puyo Clone Project)
+### 🎮 プロジェクト紹介 | Project Overview
 
----
+このプロジェクトは、クラシックなパズルゲーム **ぷよぷよ** を **C++** と **SFML** を用いて実装した個人学習プロジェクトです。
 
-## 🎮 Project Overview | プロジェクト紹介
+-----
 
-* **JP:** このプロジェクトは、クラシックなパズルゲーム **ぷよぷよ** を C++ と **SFML** を用いて実装した個人学習プロジェクトです。  
-* **EN:** This project is a personal study project implementing the classic puzzle game **Puyo Puyo** using C++ and **SFML**.
+### 🛠 技術スタック | Tech Stack
 
----
+  - **言語 | Language**: C++17
+  - **ライブラリ | Library**: SFML 2.5.1
+  - **開発環境 | Development Environment**: Visual Studio Code + MinGW / MSYS2
+  - **バージョン管理 | Version Control**: Git & GitHub
 
-## 🛠 Tech Stack | 技術スタック
+-----
 
-* **Language | 言語**: C++17  
-* **Library | ライブラリ**: [SFML 2.5.1](https://www.sfml-dev.org/)  
-* **Development Environment | 開発環境**: Visual Studio Code + MinGW / MSYS2  
-* **Version Control | バージョン管理**: Git & GitHub  
+### ✨ 主要機能 | Key Features
 
----
+  - 基本的なブロック落下と衝突判定 | Basic block drop and collision detection
+  - 4つ以上のブロックがつながると消えるマッチングシステム | Matching system where 4 or more connected blocks disappear
+  - スコア計算と連鎖機能 | Score calculation and chain (combo) system
+  - シンプルなUIとゲームループの実装 | Simple UI and game loop implementation
 
-## ✨ Key Features | 主な機能
+-----
 
-* **JP:** 基本的なブロック落下と衝突判定  
-* **EN:** Basic block drop and collision detection  
+### ⚙️ 実行方法 | How to Run
 
-* **JP:** 4つ以上のブロックがつながると消えるマッチングシステム  
-* **EN:** Matching system where 4 or more connected blocks disappear  
+1.  **開発環境準備 | Setup Environment**
+      - MSYS2をインストールします。 | Install MSYS2.
+      - MINGW64環境を実行し、以下のパッケージをインストールします。 | Run MINGW64 environment and install the following packages:
+        ```bash
+        pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-sfml
+        ```
+2.  **リポジトリのクローン | Clone Repository**
+    ```bash
+    git clone https://github.com/Gyu1234/Puyo_Game.git
+    cd Puyo_Game
+    ```
+3.  **ビルド | Build**
+    ```bash
+    g++ src/main.cpp -o puyo -lsfml-graphics -lsfml-window -lsfml-system
+    ```
+4.  **実行 | Run**
+    ```bash
+    ./puyo
+    ```
 
-* **JP:** スコア計算と連鎖機能  
-* **EN:** Score calculation and chain (combo) system  
+> ⚠️ **注意 | Note**: 上記のコマンドは、必ずMSYS2 MINGW64ターミナルで実行してください。 | The above command must be run in the MSYS2 MINGW64 terminal to work correctly.
 
-* **JP:** シンプルなUIとゲームループの実装  
-* **EN:** Simple UI and game loop implementation  
+-----
 
----
+### 🚀 プロジェクト成果 | Achievements
 
-## 📸 Screenshots | 実行画面
+  - C++ のオブジェクト指向プログラミング実習 | Practiced object-oriented programming in C++
+  - ゲームループとイベント処理の理解 | Gained understanding of game loop and event handling
+  - SFML の活用経験 | Experience with SFML library
+  - 基本的なゲームアルゴリズム設計力の向上 | Improved basic game algorithm design skills
 
-<p align="center">
-  <img src="https://github.com/user-attachments/assets/eb9e5d27-ba6b-4b6f-b54b-8f65ef26b0be" alt="Puyo_1" width="250"/>
-  <img src="https://github.com/user-attachments/assets/ef145c17-77e8-4993-8922-cc534a29acc1" alt="Puyo_2" width="250"/>
-  <img src="https://github.com/user-attachments/assets/8f761123-c736-4909-8f34-50b49eb2e386" alt="Puyo_3" width="250"/>
-</p>
+-----
 
----
+### 📖 今後の改善点 | Future Improvements
 
-## ⚙️ How to Run | 実行方法
+  - 2人プレイ対応 | Two-player mode
+  - UI/UX 改善 | Improved UI/UX
+  - CMake 導入 | CMake build system
+  - GitHub Actions CI/CD 構築 | GitHub Actions CI/CD
 
-### 1. Setup Environment | 開発環境準備
+-----
 
-* [MSYS2](https://www.msys2.org/) installation  
-* Open **MINGW64** and install packages:
+### 🌐 GitHub リポジトリ | Repository
 
-```bash
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-sfml
+🔗 [Puyo\_Game](https://www.google.com/search?q=https://github.com/Gyu1234/Puyo_Game)
