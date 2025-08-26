@@ -9,35 +9,261 @@
 #include <iomanip>
 #include <cmath>
 #include <memory>
+#include <unordered_map>
 
 using namespace std;
 
-// ---- 기본 상수 ----
+// ---- 화면 비율 개선된 상수들 ----
 static const int COLS = 6;
 static const int ROWS = 12;
-static const int CELL = 32;
-static const int WINDOW_WIDTH = COLS * CELL + 250;
-static const int WINDOW_HEIGHT = ROWS * CELL + 50;
+static const int BASE_CELL_SIZE = 32;
+static const float ASPECT_RATIO = 4.0f / 3.0f; // 게임의 기본 비율
+static const int BASE_GAME_WIDTH = COLS * BASE_CELL_SIZE;
+static const int BASE_GAME_HEIGHT = ROWS * BASE_CELL_SIZE;
+static const int BASE_UI_WIDTH = 280; // UI 패널 너비 증가
+static const int BASE_WINDOW_WIDTH = BASE_GAME_WIDTH + BASE_UI_WIDTH;
+static const int BASE_WINDOW_HEIGHT = BASE_GAME_HEIGHT + 80;
+
+// 동적 크기 관리 구조체
+struct DisplaySettings {
+    float scaleFactor = 1.0f;
+    int cellSize = BASE_CELL_SIZE;
+    int gameWidth = BASE_GAME_WIDTH;
+    int gameHeight = BASE_GAME_HEIGHT;
+    int uiWidth = BASE_UI_WIDTH;
+    int windowWidth = BASE_WINDOW_WIDTH;
+    int windowHeight = BASE_WINDOW_HEIGHT;
+    
+    void updateScale(int windowW, int windowH) {
+        float scaleX = static_cast<float>(windowW) / BASE_WINDOW_WIDTH;
+        float scaleY = static_cast<float>(windowH) / BASE_WINDOW_HEIGHT;
+        
+        // 비율을 유지하면서 더 작은 스케일 사용
+        scaleFactor = std::min(scaleX, scaleY);
+        
+        cellSize = static_cast<int>(BASE_CELL_SIZE * scaleFactor);
+        gameWidth = COLS * cellSize;
+        gameHeight = ROWS * cellSize;
+        uiWidth = static_cast<int>(BASE_UI_WIDTH * scaleFactor);
+        windowWidth = gameWidth + uiWidth;
+        windowHeight = gameHeight + static_cast<int>(80 * scaleFactor);
+    }
+    
+    sf::Vector2f getGameOffset(int windowW, int windowH) const {
+        float offsetX = (windowW - windowWidth) / 2.0f;
+        float offsetY = (windowH - windowHeight) / 2.0f;
+        return sf::Vector2f(std::max(0.0f, offsetX), std::max(0.0f, offsetY));
+    }
+};
+
+// 향상된 폰트 매니저
+class FontManager {
+private:
+    std::unordered_map<std::string, sf::Font> fonts;
+    sf::Font defaultFont;
+    bool defaultFontLoaded = false;
+    
+public:
+    bool loadAllFonts() {
+        // 폰트 경로들을 우선순위별로 정리
+        vector<pair<string, vector<string>>> fontCategories = {
+            {"title", {
+                "fonts/orbitron-bold.ttf",
+                "fonts/audiowide.ttf", 
+                "assets/fonts/title.ttf",
+                "C:/Windows/Fonts/impact.ttf",
+                "C:/Windows/Fonts/arial.ttf"
+            }},
+            {"ui", {
+                "fonts/roboto.ttf",
+                "fonts/opensans.ttf",
+                "assets/fonts/ui.ttf", 
+                "C:/Windows/Fonts/segoeui.ttf",
+                "C:/Windows/Fonts/arial.ttf"
+            }},
+            {"score", {
+                "fonts/courier-new.ttf",
+                "fonts/sourcecodepro.ttf",
+                "assets/fonts/mono.ttf",
+                "C:/Windows/Fonts/consola.ttf", 
+                "C:/Windows/Fonts/arial.ttf"
+            }},
+            {"retro", {
+                "fonts/pressstart2p.ttf",
+                "fonts/pixelated.ttf",
+                "assets/fonts/retro.ttf",
+                "C:/Windows/Fonts/arial.ttf"
+            }}
+        };
+        
+        // 각 카테고리별 폰트 로딩 시도
+        int loadedCount = 0;
+        for(const auto& category : fontCategories) {
+            for(const auto& path : category.second) {
+                sf::Font font;
+                if(font.loadFromFile(path)) {
+                    fonts[category.first] = font;
+                    loadedCount++;
+                    break;
+                }
+            }
+        }
+        
+        // 기본 폰트 로딩 (fallback)
+        vector<string> defaultPaths = {
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/calibri.ttf", 
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "arial.ttf"
+        };
+        
+        for(const auto& path : defaultPaths) {
+            if(defaultFont.loadFromFile(path)) {
+                defaultFontLoaded = true;
+                break;
+            }
+        }
+        
+        return loadedCount > 0 || defaultFontLoaded;
+    }
+    
+    const sf::Font& getFont(const string& category) const {
+        auto it = fonts.find(category);
+        if(it != fonts.end()) {
+            return it->second;
+        }
+        return defaultFontLoaded ? defaultFont : fonts.begin()->second;
+    }
+    
+    bool hasFont(const string& category) const {
+        return fonts.find(category) != fonts.end();
+    }
+    
+    bool isLoaded() const {
+        return !fonts.empty() || defaultFontLoaded;
+    }
+};
 
 // 게임 상태
 enum GameState { MENU, PLAYING, GAME_OVER, PAUSED };
 
-// 셀 상태
+// 셀 상태  
 enum Color { EMPTY=0, RED, GREEN, BLUE, YELLOW, PURPLE, COLOR_COUNT };
 
 // 2차원 좌표
 struct Vec2 { int x, y; };
 
-// 키 입력 상태 관리 (DAS 구현용) - 최적화된 버전
+// 향상된 텍스트 렌더러 클래스
+class TextRenderer {
+private:
+    const FontManager& fontManager;
+    const DisplaySettings& display;
+    
+public:
+    TextRenderer(const FontManager& fm, const DisplaySettings& ds) 
+        : fontManager(fm), display(ds) {}
+    
+    enum TextStyle {
+        NORMAL,
+        OUTLINED,
+        SHADOWED, 
+        GLOWING,
+        RETRO
+    };
+    
+    void drawText(sf::RenderWindow& window, const string& text, 
+                  const string& fontCategory, int baseSize,
+                  sf::Vector2f position, sf::Color color,
+                  TextStyle style = NORMAL, float scale = 1.0f,
+                  sf::Vector2f gameOffset = sf::Vector2f(0, 0)) const {
+        
+        if(!fontManager.isLoaded()) return;
+        
+        int scaledSize = static_cast<int>(baseSize * display.scaleFactor * scale);
+        sf::Vector2f scaledPos = sf::Vector2f(
+            position.x * display.scaleFactor + gameOffset.x,
+            position.y * display.scaleFactor + gameOffset.y
+        );
+        
+        sf::Text textObj(text, fontManager.getFont(fontCategory), scaledSize);
+        
+        switch(style) {
+            case SHADOWED: {
+                sf::Text shadow = textObj;
+                shadow.setFillColor(sf::Color(0, 0, 0, 120));
+                shadow.setPosition(scaledPos.x + 2 * display.scaleFactor, 
+                                 scaledPos.y + 2 * display.scaleFactor);
+                window.draw(shadow);
+                break;
+            }
+            case OUTLINED: {
+                textObj.setOutlineThickness(1.5f * display.scaleFactor);
+                textObj.setOutlineColor(sf::Color(0, 0, 0, 200));
+                break;
+            }
+            case GLOWING: {
+                // 글로우 효과를 위한 여러 레이어
+                for(int i = 1; i <= 3; i++) {
+                    sf::Text glow = textObj;
+                    sf::Color glowColor = color;
+                    glowColor.a = static_cast<sf::Uint8>(60 / i);
+                    glow.setFillColor(glowColor);
+                    float offset = i * 2.0f * display.scaleFactor;
+                    for(int dx = -1; dx <= 1; dx++) {
+                        for(int dy = -1; dy <= 1; dy++) {
+                            if(dx == 0 && dy == 0) continue;
+                            glow.setPosition(scaledPos.x + dx * offset, 
+                                           scaledPos.y + dy * offset);
+                            window.draw(glow);
+                        }
+                    }
+                }
+                break;
+            }
+            case RETRO: {
+                // 레트로 스타일: 픽셀화된 효과
+                textObj.setOutlineThickness(1.0f * display.scaleFactor);
+                textObj.setOutlineColor(sf::Color::Black);
+                break;
+            }
+        }
+        
+        textObj.setFillColor(color);
+        textObj.setPosition(scaledPos);
+        window.draw(textObj);
+    }
+    
+    void drawCenteredText(sf::RenderWindow& window, const string& text,
+                         const string& fontCategory, int baseSize,
+                         sf::Vector2f centerPos, sf::Color color,
+                         TextStyle style = NORMAL, float scale = 1.0f,
+                         sf::Vector2f gameOffset = sf::Vector2f(0, 0)) const {
+        
+        if(!fontManager.isLoaded()) return;
+        
+        int scaledSize = static_cast<int>(baseSize * display.scaleFactor * scale);
+        sf::Text textObj(text, fontManager.getFont(fontCategory), scaledSize);
+        sf::FloatRect bounds = textObj.getLocalBounds();
+        
+        sf::Vector2f adjustedPos(
+            centerPos.x - bounds.width / 2,
+            centerPos.y - bounds.height / 2
+        );
+        
+        drawText(window, text, fontCategory, baseSize, adjustedPos, color, style, scale, gameOffset);
+    }
+};
+
+// 키 입력 상태 관리 (기존과 동일)
 struct InputState {
     bool isPressed = false;
     bool wasPressed = false;
     float timer = 0.0f;
     bool isRepeating = false;
     
-    // DAS(Delayed Auto Shift) 설정
     static constexpr float INITIAL_DELAY = 0.25f;
-    static constexpr float REPEAT_DELAY = 0.06f; // 더 빠른 반복
+    static constexpr float REPEAT_DELAY = 0.06f;
     
     void update(float dt, bool keyPressed) {
         wasPressed = isPressed;
@@ -63,7 +289,7 @@ struct InputState {
     }
 };
 
-// 파티클 시스템 최적화
+// 파티클 시스템 (기존과 동일하지만 스케일 적용)
 struct Particle {
     sf::Vector2f position;
     sf::Vector2f velocity;
@@ -80,18 +306,16 @@ struct Particle {
         position += velocity * dt;
         life -= dt;
         
-        // 더 부드러운 알파 페이드
         float alpha = std::pow(life / maxLife, 0.7f) * 255.0f;
         color.a = static_cast<sf::Uint8>(std::max(0.0f, alpha));
         
         velocity.y += gravity * dt;
-        size *= 0.995f; // 더 천천히 줄어듦
+        size *= 0.995f;
         
         return life > 0;
     }
 };
 
-// 점수 이펙트 개선
 struct ScoreEffect {
     sf::Vector2f position;
     sf::Vector2f velocity;
@@ -109,11 +333,9 @@ struct ScoreEffect {
         position += velocity * dt;
         life -= dt;
         
-        // 바운스 효과
         bounce += dt * 8.0f;
-        velocity.y += 30.0f * dt; // 중력 효과
+        velocity.y += 30.0f * dt;
         
-        // 스케일 애니메이션
         if (life > maxLife * 0.8f) {
             scale += dt * 3.0f;
         } else if (life < maxLife * 0.3f) {
@@ -121,7 +343,6 @@ struct ScoreEffect {
         }
         scale = std::max(0.1f, scale);
         
-        // 더 부드러운 페이드아웃
         float alpha = std::pow(life / maxLife, 0.5f) * 255.0f;
         color.a = static_cast<sf::Uint8>(std::max(0.0f, alpha));
         
@@ -134,7 +355,7 @@ struct PuyoPair {
     Vec2 pivot;
     Vec2 sub;
     Color c1, c2;
-    float animationTimer = 0.0f; // 스폰 애니메이션용
+    float animationTimer = 0.0f;
 };
 
 // 유틸 함수들
@@ -155,54 +376,7 @@ float randomFloat(float min, float max) {
     return dist(rng());
 }
 
-// 개선된 폰트 로딩
-bool loadFont(sf::Font& font) {
-    vector<string> fontPaths = {
-        "arial.ttf",
-        "fonts/arial.ttf",
-        "assets/fonts/arial.ttf",
-        "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/calibri.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    };
-    
-    for(const auto& path : fontPaths) {
-        if(font.loadFromFile(path)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// 향상된 텍스트 렌더링 함수
-void drawStyledText(sf::RenderWindow& window, const string& text, sf::Font& font, 
-                   int size, sf::Vector2f position, sf::Color color, 
-                   bool outline = false, bool shadow = false, float scale = 1.0f) {
-    sf::Text textObj(text, font, size);
-    
-    // 그림자 효과 - 더 부드럽게
-    if(shadow) {
-        sf::Text shadowText = textObj;
-        shadowText.setFillColor(sf::Color(0, 0, 0, 120));
-        shadowText.setPosition(position.x + 1.5f, position.y + 1.5f);
-        shadowText.setScale(scale, scale);
-        window.draw(shadowText);
-    }
-    
-    // 외곽선 효과
-    if(outline) {
-        textObj.setOutlineThickness(1.5f);
-        textObj.setOutlineColor(sf::Color(0, 0, 0, 180));
-    }
-    
-    textObj.setFillColor(color);
-    textObj.setPosition(position);
-    textObj.setScale(scale, scale);
-    window.draw(textObj);
-}
-
-// 보드 클래스 - 성능 최적화
+// 보드 클래스 (스케일링 적용)
 struct Board {
     array<array<Color, COLS>, ROWS> g{};
     int score = 0;
@@ -219,14 +393,12 @@ struct Board {
     float chainDisplayTimer = 0.0f;
     int currentChain = 0;
     
-    // 렌더링 최적화용
-    mutable vector<sf::RectangleShape> tileCache;
-    mutable bool cacheValid = false;
+    const DisplaySettings& display;
     
-    Board() { 
+    Board(const DisplaySettings& ds) : display(ds) { 
         clear(); 
-        // 타일 캐시 초기화
-        tileCache.reserve(ROWS * COLS);
+        particles.reserve(200);
+        scoreEffects.reserve(50);
     }
 
     void clear() {
@@ -235,11 +407,8 @@ struct Board {
                 g[y][x] = EMPTY;
         score = 0; chain = 0; level = 1; totalLinesCleared = 0; combo = 0;
         particles.clear(); scoreEffects.clear();
-        particles.reserve(200); // 메모리 미리 할당
-        scoreEffects.reserve(50);
         screenShake = 0.0f; levelUpEffect = 0.0f; chainDisplayTimer = 0.0f;
         currentChain = 0; comboTimer = 0.0f;
-        cacheValid = false;
     }
 
     bool isEmpty(int x, int y) const {
@@ -263,16 +432,13 @@ struct Board {
         if(inBounds(sx, sy)) {
             g[sy][sx] = p.c2;
         }
-        cacheValid = false; // 캐시 무효화
     }
 
     void applyGravity() {
-        bool changed = false;
         for(int x = 0; x < COLS; ++x) {
             int write = ROWS - 1;
             for(int y = ROWS - 1; y >= 0; --y) {
                 if(g[y][x] != EMPTY) {
-                    if(y != write) changed = true;
                     Color c = g[y][x];
                     g[y][x] = EMPTY;
                     g[write][x] = c;
@@ -280,79 +446,73 @@ struct Board {
                 }
             }
         }
-        if(changed) cacheValid = false;
     }
     
-    // 향상된 색상 팔레트 - HDR 색상
     sf::Color getPuyoColor(Color c) const {
         switch(c) {
-            case RED:    return sf::Color(255, 69, 58);   // 더 선명한 빨강
-            case GREEN:  return sf::Color(52, 199, 89);   // 생생한 초록
-            case BLUE:   return sf::Color(0, 122, 255);   // 깊은 파랑
-            case YELLOW: return sf::Color(255, 214, 10);  // 황금빛 노랑
-            case PURPLE: return sf::Color(191, 90, 242);  // 보라
-            case EMPTY:  return sf::Color(20, 20, 30);    // 더 어두운 배경
+            case RED:    return sf::Color(255, 69, 58);
+            case GREEN:  return sf::Color(52, 199, 89);
+            case BLUE:   return sf::Color(0, 122, 255);
+            case YELLOW: return sf::Color(255, 214, 10);
+            case PURPLE: return sf::Color(191, 90, 242);
+            case EMPTY:  return sf::Color(20, 20, 30);
             default:     return sf::Color::White;
         }
     }
     
-    // 최적화된 파티클 생성
     void createExplosionEffect(int x, int y, Color color) {
-        sf::Vector2f center(static_cast<float>(x * CELL + CELL/2), static_cast<float>(y * CELL + CELL/2));
+        sf::Vector2f center(
+            static_cast<float>(x * display.cellSize + display.cellSize/2), 
+            static_cast<float>(y * display.cellSize + display.cellSize/2)
+        );
         sf::Color particleColor = getPuyoColor(color);
         
-        // 파티클 수 줄이고 품질 향상
         int particleCount = 15;
         particles.reserve(particles.size() + particleCount);
         
         for(int i = 0; i < particleCount; i++) {
             float angle = (2 * 3.14159f * i) / particleCount + randomFloat(-0.3f, 0.3f);
-            float speed = randomFloat(100, 180);
+            float speed = randomFloat(100, 180) * display.scaleFactor;
             sf::Vector2f velocity(cos(angle) * speed, sin(angle) * speed);
             
             particles.emplace_back(center, velocity, particleColor, 
-                                 randomFloat(1.2f, 2.5f), randomFloat(4, 8));
+                                 randomFloat(1.2f, 2.5f), randomFloat(4, 8) * display.scaleFactor);
         }
         
         screenShake = std::max(screenShake, 0.5f);
     }
     
     void createScoreEffect(int x, int y, int points, int chainIndex) {
-        sf::Vector2f position(static_cast<float>(x * CELL + CELL/2), static_cast<float>(y * CELL + CELL/2));
+        sf::Vector2f position(
+            static_cast<float>(x * display.cellSize + display.cellSize/2), 
+            static_cast<float>(y * display.cellSize + display.cellSize/2)
+        );
         sf::Color color = sf::Color::White;
         
         if(chainIndex >= 5) color = sf::Color::Magenta;
         else if(chainIndex >= 4) color = sf::Color::Red;
-        else if(chainIndex >= 3) color = sf::Color(255, 165, 0); // Orange
+        else if(chainIndex >= 3) color = sf::Color(255, 165, 0);
         else if(chainIndex >= 2) color = sf::Color::Yellow;
         else if(points > 300) color = sf::Color::Cyan;
         
         scoreEffects.emplace_back(position, points, color);
     }
 
-    // 향상된 점수 계산 시스템
     int calculateScore(int removed, int chainIndex, int groupCount) {
-        // 기본 점수: 제거된 뿌요 수의 제곱
         int baseScore = removed * removed * 20;
-        
-        // 연쇄 보너스: 지수적 증가
         int chainBonus = 0;
         if(chainIndex >= 2) {
             chainBonus = (1 << (chainIndex-1)) * 120;
         }
-        
-        // 동시 소거 보너스
         int colorBonus = groupCount > 1 ? groupCount * groupCount * 100 : 0;
-        
-        // 대량 소거 보너스
         int massBonus = removed >= 10 ? (removed - 9) * 80 : 0;
-        
-        // 레벨 보너스
         int levelBonus = level * 10;
         
         return baseScore + chainBonus + colorBonus + massBonus + levelBonus;
     }
 
+    // popGroupsAndScore, getFallSpeed, isGameOver, updateEffects 메서드들은 기존과 동일...
+    
     int popGroupsAndScore(int chainIndex) {
         vector<vector<bool>> vis(ROWS, vector<bool>(COLS, false));
         int removedTotal = 0;
@@ -396,14 +556,12 @@ struct Board {
         }
 
         if(removedTotal > 0) {
-            cacheValid = false; // 캐시 무효화
             int totalPoints = calculateScore(removedTotal, chainIndex, groupCount);
             score += totalPoints;
             combo++;
-            comboTimer = 4.0f; // 콤보 표시 시간 증가
+            comboTimer = 4.0f;
             totalLinesCleared += groupCount;
             
-            // 연쇄 표시
             if(chainIndex > 1) {
                 currentChain = chainIndex;
                 chainDisplayTimer = 2.5f;
@@ -414,30 +572,30 @@ struct Board {
                 createScoreEffect(center.x, center.y, totalPoints, chainIndex);
             }
             
-            // 레벨업 체크 - 더 균형잡힌 시스템
-            int newLevel = std::min(25, (score / 1200) + 1); // 최대 레벨 25로 증가
+            int newLevel = std::min(25, (score / 1200) + 1);
             if(newLevel > level) {
                 level = newLevel;
-                score += level * 150; // 레벨업 보너스 증가
+                score += level * 150;
                 levelUpEffect = 4.0f;
                 
-                // 레벨업 파티클 - 더 화려하게
                 for(int i = 0; i < 80; i++) {
                     float angle = randomFloat(0, 2 * 3.14159f);
-                    float speed = randomFloat(200, 400);
-                    sf::Vector2f pos(static_cast<float>(COLS * CELL / 2), static_cast<float>(ROWS * CELL / 2));
+                    float speed = randomFloat(200, 400) * display.scaleFactor;
+                    sf::Vector2f pos(
+                        static_cast<float>(display.gameWidth / 2), 
+                        static_cast<float>(display.gameHeight / 2)
+                    );
                     sf::Vector2f vel(cos(angle) * speed, sin(angle) * speed);
-                    particles.emplace_back(pos, vel, sf::Color(255, 215, 0), 3.0f, 12); // Gold
+                    particles.emplace_back(pos, vel, sf::Color(255, 215, 0), 3.0f, 12 * display.scaleFactor);
                 }
             }
         } else {
-            combo = 0; // 콤보 리셋
+            combo = 0;
         }
         
         return removedTotal;
     }
     
-    // 부드러운 낙하 속도 곡선
     float getFallSpeed() const {
         const float speeds[] = {
             1.2f, 1.0f, 0.85f, 0.7f, 0.6f, 0.5f, 0.42f, 0.36f, 0.3f, 0.25f,
@@ -448,16 +606,13 @@ struct Board {
     }
     
     bool isGameOver() const {
-        // 더 관대한 게임오버 조건
         for(int x = 0; x < COLS; ++x) {
-            if(g[1][x] != EMPTY) return true; // 2행에서 체크
+            if(g[1][x] != EMPTY) return true;
         }
         return false;
     }
     
-    // 최적화된 이펙트 업데이트
     void updateEffects(float dt) {
-        // 파티클 업데이트 - 벡터 크기 미리 체크
         if(!particles.empty()) {
             particles.erase(
                 std::remove_if(particles.begin(), particles.end(),
@@ -466,7 +621,6 @@ struct Board {
             );
         }
         
-        // 점수 이펙트 업데이트
         if(!scoreEffects.empty()) {
             scoreEffects.erase(
                 std::remove_if(scoreEffects.begin(), scoreEffects.end(),
@@ -475,7 +629,6 @@ struct Board {
             );
         }
         
-        // 화면 흔들림과 기타 이펙트
         screenShake = std::max(0.0f, screenShake - dt * 2.5f);
         levelUpEffect = std::max(0.0f, levelUpEffect - dt);
         chainDisplayTimer = std::max(0.0f, chainDisplayTimer - dt);
@@ -485,7 +638,7 @@ struct Board {
     sf::Vector2f getShakeOffset() const {
         if(screenShake <= 0) return sf::Vector2f(0, 0);
         
-        float intensity = screenShake * 6.0f; // 흔들림 강도 줄임
+        float intensity = screenShake * 6.0f * display.scaleFactor;
         return sf::Vector2f(
             randomFloat(-intensity, intensity),
             randomFloat(-intensity, intensity)
@@ -497,11 +650,9 @@ struct Board {
 Vec2 rotateCW(const Vec2& v) { return Vec2{ -v.y, v.x }; }
 Vec2 rotateCCW(const Vec2& v) { return Vec2{ v.y, -v.x }; }
 
-// 향상된 벽차기 시스템
 bool wallKick(Board& b, PuyoPair& p) {
     if(!b.collision(p)) return true;
     
-    // 더 많은 벽차기 시도
     vector<Vec2> kickTests = {{-1, 0}, {1, 0}, {-2, 0}, {2, 0}, {0, -1}};
     
     for(const auto& kick : kickTests) {
@@ -518,7 +669,7 @@ bool wallKick(Board& b, PuyoPair& p) {
 
 PuyoPair makeSpawnPair() {
     PuyoPair p;
-    p.pivot = { COLS/2, 0 }; // 더 위에서 시작
+    p.pivot = { COLS/2, 0 };
     p.sub = { 0, -1 };
     p.c1 = randomColor();
     p.c2 = randomColor();
@@ -533,22 +684,22 @@ bool canMove(Board& b, const PuyoPair& p, int dx, int dy) {
 }
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), 
-                           "Enhanced Puyo Puyo Pro", 
-                           sf::Style::Titlebar | sf::Style::Close);
+    // 초기 윈도우 설정
+    DisplaySettings display;
+    FontManager fontManager;
+    
+    // 폰트 로딩
+    bool fontsLoaded = fontManager.loadAllFonts();
+    
+    sf::RenderWindow window(sf::VideoMode(display.windowWidth, display.windowHeight), 
+                           "Enhanced Puyo Puyo Pro - Responsive", 
+                           sf::Style::Titlebar | sf::Style::Close | sf::Style::Resize);
     window.setFramerateLimit(60);
-    window.setVerticalSyncEnabled(true); // VSync로 더 부드러운 렌더링
+    window.setVerticalSyncEnabled(true);
 
-    sf::Font font;
-    bool fontLoaded = loadFont(font);
-
-    Board board;
+    Board board(display);
     GameState gameState = MENU;
-
-    // 렌더링 객체들 미리 생성
-    sf::RectangleShape tile(sf::Vector2f(static_cast<float>(CELL-2), static_cast<float>(CELL-2)));
-    sf::CircleShape particleShape(3);
-    sf::RectangleShape uiPanel(sf::Vector2f(230, static_cast<float>(WINDOW_HEIGHT)));
+    TextRenderer textRenderer(fontManager, display);
 
     PuyoPair cur = makeSpawnPair();
     PuyoPair nextPair = makeSpawnPair();
@@ -559,10 +710,6 @@ int main() {
 
     sf::Clock clock;
     float backgroundTime = 0.0f;
-    
-    // 성능 모니터링
-    float frameTime = 0.0f;
-    int frameCount = 0;
 
     auto resetGame = [&](){
         board.clear();
@@ -575,9 +722,12 @@ int main() {
 
     while(window.isOpen()) {
         float dt = clock.restart().asSeconds();
-        frameTime += dt;
-        frameCount++;
         backgroundTime += dt;
+
+        // 윈도우 크기 변경 감지 및 스케일 업데이트
+        sf::Vector2u currentSize = window.getSize();
+        display.updateScale(currentSize.x, currentSize.y);
+        sf::Vector2f gameOffset = display.getGameOffset(currentSize.x, currentSize.y);
 
         sf::Event e;
         while(window.pollEvent(e)) {
@@ -614,14 +764,13 @@ int main() {
         if(gameState == PLAYING && alive) {
             cur.animationTimer += dt * 4.0f;
             
-            // 향상된 입력 처리
             leftInput.update(dt, sf::Keyboard::isKeyPressed(sf::Keyboard::Left));
             rightInput.update(dt, sf::Keyboard::isKeyPressed(sf::Keyboard::Right));
             downInput.update(dt, sf::Keyboard::isKeyPressed(sf::Keyboard::Down));
             rotateInput.update(dt, sf::Keyboard::isKeyPressed(sf::Keyboard::Up) || 
-                                  sf::Keyboard::isKeyPressed(sf::Keyboard::Z));
+                              sf::Keyboard::isKeyPressed(sf::Keyboard::Z));
             rotateCCWInput.update(dt, sf::Keyboard::isKeyPressed(sf::Keyboard::X) ||
-                                     sf::Keyboard::isKeyPressed(sf::Keyboard::A));
+                                 sf::Keyboard::isKeyPressed(sf::Keyboard::A));
 
             if(leftInput.shouldTrigger() && canMove(board, cur, -1, 0)) {
                 cur.pivot.x -= 1;
@@ -630,7 +779,6 @@ int main() {
                 cur.pivot.x += 1;
             }
 
-            // 양방향 회전 지원
             if(rotateInput.shouldTrigger()) {
                 PuyoPair t = cur;
                 t.sub = rotateCW(t.sub);
@@ -652,7 +800,6 @@ int main() {
             fallTimer += dt;
             float curInterval = board.getFallSpeed();
             
-            // 소프트 드롭
             if(downInput.shouldTrigger()) {
                 curInterval = 0.02f;
             }
@@ -687,17 +834,16 @@ int main() {
         board.updateEffects(dt);
 
         // 렌더링
-        window.clear(sf::Color(12, 12, 20)); // 더 어두운 배경
-
+        window.clear(sf::Color(12, 12, 20));
         sf::Vector2f shakeOffset = board.getShakeOffset();
 
         if(gameState == MENU) {
             // 향상된 배경 애니메이션
             for(int i = 0; i < 40; i++) {
                 float phase = backgroundTime * 0.4f + i * 0.2f;
-                float x = sin(phase) * 80 + cos(phase * 0.7f) * 40 + WINDOW_WIDTH/2;
-                float y = cos(phase * 0.5f) * 60 + 100 + i * 8;
-                sf::CircleShape bg(randomFloat(4, 12));
+                float x = sin(phase) * 80 * display.scaleFactor + cos(phase * 0.7f) * 40 * display.scaleFactor + currentSize.x/2;
+                float y = cos(phase * 0.5f) * 60 * display.scaleFactor + 100 * display.scaleFactor + i * 8 * display.scaleFactor;
+                sf::CircleShape bg(randomFloat(4, 12) * display.scaleFactor);
                 sf::Color bgColor = board.getPuyoColor(static_cast<Color>((i % 5) + 1));
                 bgColor.a = static_cast<sf::Uint8>(60 + sin(phase) * 40);
                 bg.setFillColor(bgColor);
@@ -705,53 +851,77 @@ int main() {
                 window.draw(bg);
             }
 
-            if(fontLoaded) {
-                // 제목에 펄스 효과
+            if(fontsLoaded) {
                 float pulse = 1.0f + sin(backgroundTime * 3.0f) * 0.1f;
-                drawStyledText(window, "PUYO PUYO", font, 48, {WINDOW_WIDTH/2 - 120, 60}, 
-                              sf::Color(255, 100, 255), true, true, pulse);
-                drawStyledText(window, "ENHANCED PRO", font, 20, {WINDOW_WIDTH/2 - 60, 110}, 
-                              sf::Color::Cyan, false, true, 1.0f);
-                              
+                textRenderer.drawCenteredText(window, "PUYO PUYO", "title", 48, 
+                    sf::Vector2f(currentSize.x/2, 80 * display.scaleFactor), 
+                    sf::Color(255, 100, 255), TextRenderer::GLOWING, pulse);
+                    
+                textRenderer.drawCenteredText(window, "ENHANCED PRO", "ui", 20, 
+                    sf::Vector2f(currentSize.x/2, 120 * display.scaleFactor), 
+                    sf::Color::Cyan, TextRenderer::SHADOWED);
+                
                 // 깜빡이는 시작 안내
                 float blink = sin(backgroundTime * 4.0f);
                 if(blink > 0) {
-                    drawStyledText(window, "Press SPACE to Start", font, 18, {WINDOW_WIDTH/2 - 90, 160}, 
-                                  sf::Color::Yellow, false, true, 1.0f);
+                    textRenderer.drawCenteredText(window, "Press SPACE to Start", "ui", 18, 
+                        sf::Vector2f(currentSize.x/2, 170 * display.scaleFactor), 
+                        sf::Color::Yellow, TextRenderer::RETRO);
                 }
-                              
-                drawStyledText(window, "Controls:", font, 16, {50, 210}, sf::Color::Cyan);
-                drawStyledText(window, "Arrow Keys: Move", font, 12, {50, 230}, sf::Color::White);
-                drawStyledText(window, "Up/Z: Rotate CW", font, 12, {50, 245}, sf::Color::White);
-                drawStyledText(window, "X/A: Rotate CCW", font, 12, {50, 260}, sf::Color::White);
-                drawStyledText(window, "Down: Soft Drop", font, 12, {50, 275}, sf::Color::White);
-                drawStyledText(window, "ESC: Pause/Menu", font, 12, {50, 290}, sf::Color::White);
+                
+                // 컨트롤 안내 - 중앙 정렬
+                vector<string> controls = {
+                    "Arrow Keys: Move",
+                    "Up/Z: Rotate CW", 
+                    "X/A: Rotate CCW",
+                    "Down: Soft Drop",
+                    "ESC: Pause/Menu"
+                };
+                
+                textRenderer.drawText(window, "Controls:", "ui", 16, 
+                    sf::Vector2f(50, 220), sf::Color::Cyan, TextRenderer::NORMAL, 1.0f, gameOffset);
+                
+                for(size_t i = 0; i < controls.size(); i++) {
+                    textRenderer.drawText(window, controls[i], "ui", 12, 
+                        sf::Vector2f(50, 245 + i * 18), sf::Color::White, TextRenderer::NORMAL, 1.0f, gameOffset);
+                }
             }
         } 
         else if(gameState == PAUSED) {
-            if(fontLoaded) {
-                drawStyledText(window, "PAUSED", font, 40, {WINDOW_WIDTH/2 - 70, WINDOW_HEIGHT/2 - 60}, 
-                              sf::Color::Yellow, true, true, 1.0f);
-                drawStyledText(window, "ESC: Continue", font, 16, {WINDOW_WIDTH/2 - 60, WINDOW_HEIGHT/2 - 20}, 
-                              sf::Color::White, false, true, 1.0f);
-                drawStyledText(window, "R: Restart", font, 16, {WINDOW_WIDTH/2 - 45, WINDOW_HEIGHT/2}, 
-                              sf::Color::White, false, true, 1.0f);
+            if(fontsLoaded) {
+                textRenderer.drawCenteredText(window, "PAUSED", "title", 40, 
+                    sf::Vector2f(currentSize.x/2, currentSize.y/2 - 60), 
+                    sf::Color::Yellow, TextRenderer::OUTLINED);
+                textRenderer.drawCenteredText(window, "ESC: Continue", "ui", 16, 
+                    sf::Vector2f(currentSize.x/2, currentSize.y/2 - 20), 
+                    sf::Color::White);
+                textRenderer.drawCenteredText(window, "R: Restart", "ui", 16, 
+                    sf::Vector2f(currentSize.x/2, currentSize.y/2), 
+                    sf::Color::White);
             }
         }
         else if(gameState == GAME_OVER) {
-            if(fontLoaded) {
+            if(fontsLoaded) {
                 float gameOverPulse = 1.0f + sin(backgroundTime * 5.0f) * 0.15f;
-                drawStyledText(window, "GAME OVER", font, 40, {WINDOW_WIDTH/2 - 100, 100}, 
-                              sf::Color::Red, true, true, gameOverPulse);
+                textRenderer.drawCenteredText(window, "GAME OVER", "title", 40, 
+                    sf::Vector2f(currentSize.x/2, 100 * display.scaleFactor), 
+                    sf::Color::Red, TextRenderer::GLOWING, gameOverPulse);
                 
-                drawStyledText(window, "Final Statistics:", font, 18, {WINDOW_WIDTH/2 - 80, 150}, 
-                              sf::Color::Cyan, false, true, 1.0f);
-                drawStyledText(window, "Score: " + to_string(board.score), font, 16, 
-                              {WINDOW_WIDTH/2 - 60, 175}, sf::Color::White, false, true, 1.0f);
-                drawStyledText(window, "Level: " + to_string(board.level) + "/25", font, 16, 
-                              {WINDOW_WIDTH/2 - 60, 195}, sf::Color::Cyan, false, true, 1.0f);
-                drawStyledText(window, "Lines: " + to_string(board.totalLinesCleared), font, 16, 
-                              {WINDOW_WIDTH/2 - 60, 215}, sf::Color::White, false, true, 1.0f);
+                textRenderer.drawCenteredText(window, "Final Statistics:", "ui", 18, 
+                    sf::Vector2f(currentSize.x/2, 150 * display.scaleFactor), 
+                    sf::Color::Cyan);
+                
+                textRenderer.drawCenteredText(window, "Score: " + to_string(board.score), "score", 16, 
+                    sf::Vector2f(currentSize.x/2, 175 * display.scaleFactor), 
+                    sf::Color::White);
+                
+                textRenderer.drawCenteredText(window, "Level: " + to_string(board.level) + "/25", "ui", 16, 
+                    sf::Vector2f(currentSize.x/2, 195 * display.scaleFactor), 
+                    sf::Color::Cyan);
+                
+                textRenderer.drawCenteredText(window, "Lines: " + to_string(board.totalLinesCleared), "ui", 16, 
+                    sf::Vector2f(currentSize.x/2, 215 * display.scaleFactor), 
+                    sf::Color::White);
                 
                 // 등급 시스템
                 string grade = "D";
@@ -762,76 +932,90 @@ int main() {
                 else if(board.score >= 10000) { grade = "B"; gradeColor = sf::Color::Cyan; }
                 else if(board.score >= 5000) { grade = "C"; gradeColor = sf::Color::Green; }
                 
-                drawStyledText(window, "Grade: " + grade, font, 18, 
-                              {WINDOW_WIDTH/2 - 50, 245}, gradeColor, true, true, 1.2f);
-                              
-                drawStyledText(window, "R: Restart", font, 18, {WINDOW_WIDTH/2 - 50, 280}, 
-                              sf::Color::Yellow, false, true, 1.0f);
-                drawStyledText(window, "ESC: Menu", font, 18, {WINDOW_WIDTH/2 - 50, 305}, 
-                              sf::Color::Yellow, false, true, 1.0f);
+                textRenderer.drawCenteredText(window, "Grade: " + grade, "title", 18, 
+                    sf::Vector2f(currentSize.x/2, 245 * display.scaleFactor), 
+                    gradeColor, TextRenderer::GLOWING, 1.2f);
+                
+                textRenderer.drawCenteredText(window, "R: Restart", "ui", 18, 
+                    sf::Vector2f(currentSize.x/2, 280 * display.scaleFactor), 
+                    sf::Color::Yellow);
+                textRenderer.drawCenteredText(window, "ESC: Menu", "ui", 18, 
+                    sf::Vector2f(currentSize.x/2, 305 * display.scaleFactor), 
+                    sf::Color::Yellow);
             }
         } 
         else {
-            // 게임 플레이 화면
+            // 게임 플레이 화면 - 스케일링 적용
+            sf::RectangleShape tile(sf::Vector2f(display.cellSize - 2, display.cellSize - 2));
             
-            // 향상된 보드 렌더링
+            // 보드 렌더링
             for(int y = 0; y < ROWS; ++y) {
                 for(int x = 0; x < COLS; ++x) {
                     sf::Color tileColor = board.getPuyoColor(board.g[y][x]);
                     
                     tile.setFillColor(tileColor);
-                    tile.setPosition(static_cast<float>(x*CELL+1) + shakeOffset.x, static_cast<float>(y*CELL+1) + shakeOffset.y);
+                    tile.setPosition(
+                        x * display.cellSize + 1 + shakeOffset.x + gameOffset.x, 
+                        y * display.cellSize + 1 + shakeOffset.y + gameOffset.y
+                    );
                     window.draw(tile);
                     
-                    // 뿌요에 더 나은 하이라이트
+                    // 하이라이트와 그림자 효과
                     if(board.g[y][x] != EMPTY) {
-                        sf::CircleShape highlight(static_cast<float>(CELL/6));
+                        sf::CircleShape highlight(display.cellSize / 6.0f);
                         highlight.setFillColor(sf::Color(255, 255, 255, 80));
-                        highlight.setPosition(static_cast<float>(x*CELL + CELL/3) + shakeOffset.x, 
-                                            static_cast<float>(y*CELL + CELL/4) + shakeOffset.y);
+                        highlight.setPosition(
+                            x * display.cellSize + display.cellSize/3.0f + shakeOffset.x + gameOffset.x, 
+                            y * display.cellSize + display.cellSize/4.0f + shakeOffset.y + gameOffset.y
+                        );
                         window.draw(highlight);
                         
-                        // 깊이감을 위한 그림자
-                        sf::RectangleShape shadow(sf::Vector2f(static_cast<float>(CELL-4), static_cast<float>(CELL-4)));
+                        sf::RectangleShape shadow(sf::Vector2f(display.cellSize - 4, display.cellSize - 4));
                         sf::Color shadowColor = tileColor;
                         shadowColor.r /= 2; shadowColor.g /= 2; shadowColor.b /= 2;
                         shadow.setFillColor(shadowColor);
-                        shadow.setPosition(static_cast<float>(x*CELL+3) + shakeOffset.x, 
-                                         static_cast<float>(y*CELL+3) + shakeOffset.y);
+                        shadow.setPosition(
+                            x * display.cellSize + 3 + shakeOffset.x + gameOffset.x, 
+                            y * display.cellSize + 3 + shakeOffset.y + gameOffset.y
+                        );
                         window.draw(shadow);
                     }
                 }
             }
 
-            // 현재 조각 그리기 - 애니메이션 추가
+            // 현재 조각 그리기
             if(alive) {
                 auto drawPuyo = [&](int x, int y, Color c, bool isPivot = false) {
                     if(inBounds(x, y)) {
-                        // 스폰 애니메이션
                         float scale = 1.0f;
                         if(cur.animationTimer < 1.0f) {
                             scale = 0.5f + (cur.animationTimer * 0.5f);
                         }
                         
-                        // 회전할 때의 펄스 효과
                         if(isPivot) {
                             scale += sin(backgroundTime * 10.0f) * 0.05f;
                         }
                         
-                        sf::RectangleShape puyoTile(sf::Vector2f(static_cast<float>((CELL-2) * scale), static_cast<float>((CELL-2) * scale)));
+                        sf::RectangleShape puyoTile(sf::Vector2f(
+                            (display.cellSize - 2) * scale, 
+                            (display.cellSize - 2) * scale
+                        ));
                         puyoTile.setFillColor(board.getPuyoColor(c));
                         
-                        float offsetX = (CELL - (CELL-2) * scale) / 2;
-                        float offsetY = (CELL - (CELL-2) * scale) / 2;
-                        puyoTile.setPosition(static_cast<float>(x*CELL+1) + offsetX + shakeOffset.x, 
-                                           static_cast<float>(y*CELL+1) + offsetY + shakeOffset.y);
+                        float offsetX = (display.cellSize - (display.cellSize - 2) * scale) / 2;
+                        float offsetY = (display.cellSize - (display.cellSize - 2) * scale) / 2;
+                        puyoTile.setPosition(
+                            x * display.cellSize + 1 + offsetX + shakeOffset.x + gameOffset.x, 
+                            y * display.cellSize + 1 + offsetY + shakeOffset.y + gameOffset.y
+                        );
                         window.draw(puyoTile);
                         
-                        // 조작중인 뿌요 특별 효과
-                        sf::CircleShape activeGlow(static_cast<float>(CELL/4 * scale));
+                        sf::CircleShape activeGlow(display.cellSize / 4.0f * scale);
                         activeGlow.setFillColor(sf::Color(255, 255, 255, 100));
-                        activeGlow.setPosition(static_cast<float>(x*CELL + CELL/3) + shakeOffset.x, 
-                                             static_cast<float>(y*CELL + CELL/3) + shakeOffset.y);
+                        activeGlow.setPosition(
+                            x * display.cellSize + display.cellSize/3.0f + shakeOffset.x + gameOffset.x, 
+                            y * display.cellSize + display.cellSize/3.0f + shakeOffset.y + gameOffset.y
+                        );
                         window.draw(activeGlow);
                     }
                 };
@@ -840,59 +1024,59 @@ int main() {
                 drawPuyo(cur.pivot.x + cur.sub.x, cur.pivot.y + cur.sub.y, cur.c2, false);
             }
 
-            // 향상된 파티클 렌더링
+            // 파티클 렌더링
+            sf::CircleShape particleShape;
             for(const auto& particle : board.particles) {
                 particleShape.setRadius(particle.size);
                 particleShape.setFillColor(particle.color);
-                particleShape.setPosition(particle.position.x - particle.size + shakeOffset.x, 
-                                        particle.position.y - particle.size + shakeOffset.y);
+                particleShape.setPosition(
+                    particle.position.x - particle.size + shakeOffset.x + gameOffset.x, 
+                    particle.position.y - particle.size + shakeOffset.y + gameOffset.y
+                );
                 window.draw(particleShape);
             }
 
             // 점수 이펙트 렌더링
-            if(fontLoaded) {
+            if(fontsLoaded) {
                 for(const auto& effect : board.scoreEffects) {
                     float bounce = sin(effect.bounce) * 3.0f;
-                    drawStyledText(window, "+" + to_string(effect.score), font, 14, 
-                                 {effect.position.x + shakeOffset.x, effect.position.y + shakeOffset.y + bounce}, 
-                                 effect.color, true, false, effect.scale);
+                    textRenderer.drawText(window, "+" + to_string(effect.score), "score", 14, 
+                        sf::Vector2f(effect.position.x, effect.position.y + bounce), 
+                        effect.color, TextRenderer::OUTLINED, effect.scale, 
+                        sf::Vector2f(shakeOffset.x + gameOffset.x, shakeOffset.y + gameOffset.y));
                 }
             }
 
-            // 향상된 UI 패널
+            // UI 패널 - 스케일링 적용
+            sf::RectangleShape uiPanel(sf::Vector2f(display.uiWidth, currentSize.y));
             uiPanel.setFillColor(sf::Color(15, 15, 25, 220));
-            uiPanel.setPosition(static_cast<float>(COLS * CELL + 10), 0);
+            uiPanel.setPosition(display.gameWidth + gameOffset.x + 10, gameOffset.y);
             window.draw(uiPanel);
 
-            // 그라디언트 효과를 위한 UI 상단 강조
-            sf::RectangleShape uiHeader(sf::Vector2f(230, 4));
+            sf::RectangleShape uiHeader(sf::Vector2f(display.uiWidth, 4 * display.scaleFactor));
             uiHeader.setFillColor(sf::Color::Cyan);
-            uiHeader.setPosition(static_cast<float>(COLS * CELL + 10), 0);
+            uiHeader.setPosition(display.gameWidth + gameOffset.x + 10, gameOffset.y);
             window.draw(uiHeader);
 
-            // UI 정보 - 더욱 향상된 레이아웃
-            if(fontLoaded) {
-                int uiX = COLS * CELL + 20;
-                int yPos = 15;
+            // UI 정보 - 향상된 폰트 적용
+            if(fontsLoaded) {
+                float uiX = display.gameWidth + gameOffset.x + 20;
+                float yPos = gameOffset.y + 15;
                 
-                // 점수 - 애니메이션 효과
-                drawStyledText(window, "SCORE", font, 14, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::Cyan, false, true);
-                yPos += 20;
+                textRenderer.drawText(window, "SCORE", "ui", 14, sf::Vector2f(uiX, yPos), sf::Color::Cyan, TextRenderer::SHADOWED);
+                yPos += 25 * display.scaleFactor;
                 
-                // 점수 증가 애니메이션 (간단화)
-                string scoreStr = to_string(board.score);
-                drawStyledText(window, scoreStr, font, 20, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::White, true, true);
-                yPos += 35;
+                textRenderer.drawText(window, to_string(board.score), "score", 20, sf::Vector2f(uiX, yPos), sf::Color::White, TextRenderer::OUTLINED);
+                yPos += 40 * display.scaleFactor;
 
-                // 레벨 - 프로그레스 바 스타일
-                drawStyledText(window, "LEVEL", font, 14, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::Yellow, false, true);
-                yPos += 20;
+                textRenderer.drawText(window, "LEVEL", "ui", 14, sf::Vector2f(uiX, yPos), sf::Color::Yellow, TextRenderer::SHADOWED);
+                yPos += 25 * display.scaleFactor;
                 
                 sf::Color levelColor = board.level < 8 ? sf::Color::White : 
                                      board.level < 15 ? sf::Color::Yellow : 
                                      board.level < 20 ? sf::Color(255, 165, 0) : sf::Color::Red;
-                drawStyledText(window, to_string(board.level) + "/25", font, 18, {static_cast<float>(uiX), static_cast<float>(yPos)}, levelColor, true, true);
-                yPos += 25;
+                textRenderer.drawText(window, to_string(board.level) + "/25", "ui", 18, sf::Vector2f(uiX, yPos), levelColor, TextRenderer::OUTLINED);
+                yPos += 30 * display.scaleFactor;
                 
                 // 레벨 프로그레스 바
                 int nextLevelScore = (board.level * 1200);
@@ -901,34 +1085,35 @@ int main() {
                     float progress = static_cast<float>(board.score - currentLevelScore) / static_cast<float>(nextLevelScore - currentLevelScore);
                     progress = std::min(1.0f, std::max(0.0f, progress));
                     
-                    sf::RectangleShape progressBG(sf::Vector2f(180, 8));
+                    sf::RectangleShape progressBG(sf::Vector2f(180 * display.scaleFactor, 8 * display.scaleFactor));
                     progressBG.setFillColor(sf::Color(40, 40, 50));
-                    progressBG.setPosition(static_cast<float>(uiX), static_cast<float>(yPos));
+                    progressBG.setPosition(uiX, yPos);
                     window.draw(progressBG);
                     
-                    sf::RectangleShape progressBar(sf::Vector2f(180 * progress, 8));
+                    sf::RectangleShape progressBar(sf::Vector2f(180 * display.scaleFactor * progress, 8 * display.scaleFactor));
                     progressBar.setFillColor(levelColor);
-                    progressBar.setPosition(static_cast<float>(uiX), static_cast<float>(yPos));
+                    progressBar.setPosition(uiX, yPos);
                     window.draw(progressBar);
-                    yPos += 15;
+                    yPos += 20 * display.scaleFactor;
                     
                     int remainingScore = nextLevelScore - board.score;
-                    drawStyledText(window, "Next: " + to_string(remainingScore), font, 10, {static_cast<float>(uiX), static_cast<float>(yPos)}, 
-                                 sf::Color(160, 160, 160), false, true);
+                    textRenderer.drawText(window, "Next: " + to_string(remainingScore), "ui", 10, 
+                        sf::Vector2f(uiX, yPos), sf::Color(160, 160, 160));
                 } else {
-                    drawStyledText(window, "MAX LEVEL!", font, 12, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::Red, true, true);
+                    textRenderer.drawText(window, "MAX LEVEL!", "title", 12, 
+                        sf::Vector2f(uiX, yPos), sf::Color::Red, TextRenderer::GLOWING);
                 }
-                yPos += 20;
+                yPos += 25 * display.scaleFactor;
 
-                // 콤보와 연쇄 표시 - 더 화려하게
+                // 콤보와 연쇄 표시
                 if(board.comboTimer > 0 && board.combo > 1) {
                     sf::Color comboColor = board.combo < 5 ? sf::Color::Yellow :
                                          board.combo < 10 ? sf::Color(255, 165, 0) : 
                                          board.combo < 15 ? sf::Color::Red : sf::Color::Magenta;
                     float comboScale = 1.0f + sin(backgroundTime * 8.0f) * 0.1f;
-                    drawStyledText(window, to_string(board.combo) + " COMBO!", font, 14, {static_cast<float>(uiX), static_cast<float>(yPos)}, 
-                                 comboColor, true, true, comboScale);
-                    yPos += 22;
+                    textRenderer.drawText(window, to_string(board.combo) + " COMBO!", "retro", 14, 
+                        sf::Vector2f(uiX, yPos), comboColor, TextRenderer::GLOWING, comboScale);
+                    yPos += 28 * display.scaleFactor;
                 }
 
                 if(board.chainDisplayTimer > 0 && board.currentChain > 1) {
@@ -936,72 +1121,61 @@ int main() {
                                          board.currentChain < 5 ? sf::Color::Yellow : 
                                          board.currentChain < 8 ? sf::Color::Red : sf::Color::Magenta;
                     float scale = 1.2f + (board.chainDisplayTimer / 2.5f) * 0.4f;
-                    drawStyledText(window, to_string(board.currentChain) + " CHAIN!", font, 16, {static_cast<float>(uiX), static_cast<float>(yPos)}, 
-                                 chainColor, true, true, scale);
-                    yPos += 28;
+                    textRenderer.drawText(window, to_string(board.currentChain) + " CHAIN!", "retro", 16, 
+                        sf::Vector2f(uiX, yPos), chainColor, TextRenderer::GLOWING, scale);
+                    yPos += 35 * display.scaleFactor;
                 }
 
-                // 다음 뿌요 미리보기 - 향상된 디자인
-                yPos += 10;
-                drawStyledText(window, "NEXT", font, 12, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::Cyan, false, true);
-                yPos += 20;
+                // 다음 뿌요 미리보기
+                yPos += 15 * display.scaleFactor;
+                textRenderer.drawText(window, "NEXT", "ui", 12, sf::Vector2f(uiX, yPos), sf::Color::Cyan, TextRenderer::SHADOWED);
+                yPos += 25 * display.scaleFactor;
                 
-                // 다음 뿌요 배경
-                sf::RectangleShape nextBG(sf::Vector2f(60, 60));
+                sf::RectangleShape nextBG(sf::Vector2f(60 * display.scaleFactor, 60 * display.scaleFactor));
                 nextBG.setFillColor(sf::Color(25, 25, 35));
-                nextBG.setOutlineThickness(1);
+                nextBG.setOutlineThickness(1 * display.scaleFactor);
                 nextBG.setOutlineColor(sf::Color(70, 70, 80));
-                nextBG.setPosition(static_cast<float>(uiX), static_cast<float>(yPos));
+                nextBG.setPosition(uiX, yPos);
                 window.draw(nextBG);
                 
-                // 다음 뿌요 그리기
-                sf::RectangleShape nextTile(sf::Vector2f(22, 22));
+                sf::RectangleShape nextTile(sf::Vector2f(22 * display.scaleFactor, 22 * display.scaleFactor));
                 
                 nextTile.setFillColor(board.getPuyoColor(nextPair.c1));
-                nextTile.setPosition(static_cast<float>(uiX + 19), static_cast<float>(yPos + 10));
+                nextTile.setPosition(uiX + 19 * display.scaleFactor, yPos + 10 * display.scaleFactor);
                 window.draw(nextTile);
 
                 nextTile.setFillColor(board.getPuyoColor(nextPair.c2));
-                nextTile.setPosition(static_cast<float>(uiX + 19), static_cast<float>(yPos + 35));
+                nextTile.setPosition(uiX + 19 * display.scaleFactor, yPos + 35 * display.scaleFactor);
                 window.draw(nextTile);
-                yPos += 70;
+                yPos += 80 * display.scaleFactor;
 
-                // 통계 정보 - 더 상세하게
-                drawStyledText(window, "STATISTICS", font, 12, {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::Cyan, false, true);
-                yPos += 18;
-                drawStyledText(window, "Groups: " + to_string(board.totalLinesCleared), font, 10, 
-                             {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color::White, false, true);
-                yPos += 15;
+                // 통계 정보
+                textRenderer.drawText(window, "STATISTICS", "ui", 12, sf::Vector2f(uiX, yPos), sf::Color::Cyan, TextRenderer::SHADOWED);
+                yPos += 20 * display.scaleFactor;
+                textRenderer.drawText(window, "Groups: " + to_string(board.totalLinesCleared), "ui", 10, 
+                    sf::Vector2f(uiX, yPos), sf::Color::White);
+                yPos += 18 * display.scaleFactor;
 
-                // 속도 표시 - 더 직관적으로
+                // 속도 표시
                 float speed = board.getFallSpeed();
                 int speedPercent = static_cast<int>((1.2f - speed) / 1.2f * 100);
                 sf::Color speedColor = speedPercent < 50 ? sf::Color::Green :
                                      speedPercent < 80 ? sf::Color::Yellow : sf::Color::Red;
-                drawStyledText(window, "Speed: " + to_string(speedPercent) + "%", font, 10, 
-                             {static_cast<float>(uiX), static_cast<float>(yPos)}, speedColor, false, true);
-                yPos += 20;
+                textRenderer.drawText(window, "Speed: " + to_string(speedPercent) + "%", "ui", 10, 
+                    sf::Vector2f(uiX, yPos), speedColor);
+                yPos += 25 * display.scaleFactor;
 
-                // PPS (Pieces Per Second) 추정
-                if(board.totalLinesCleared > 0) {
-                    float estimatedPPS = board.totalLinesCleared / (backgroundTime / 4.0f); // 대략적 계산
-                    drawStyledText(window, "PPS: " + to_string(static_cast<int>(estimatedPPS * 10) / 10.0f), font, 10, 
-                                 {static_cast<float>(uiX), static_cast<float>(yPos)}, sf::Color(150, 150, 255), false, true);
-                    yPos += 20;
-                }
-
-                // 레벨업 효과 텍스트 - 간단하게
+                // 레벨업 효과
                 if(board.levelUpEffect > 0) {
-                    drawStyledText(window, "LEVEL UP!", font, 16, {static_cast<float>(uiX), static_cast<float>(yPos)}, 
-                                 sf::Color::Yellow, true, true);
+                    textRenderer.drawText(window, "LEVEL UP!", "title", 16, sf::Vector2f(uiX, yPos), 
+                        sf::Color::Yellow, TextRenderer::GLOWING);
                 }
-                yPos += 35;
 
-                // 컨트롤 안내 - 더 깔끔하게
-                int controlsY = WINDOW_HEIGHT - 120;
-                drawStyledText(window, "CONTROLS", font, 10, {static_cast<float>(uiX), static_cast<float>(controlsY)}, 
-                             sf::Color(100, 100, 120), false, true);
-                controlsY += 15;
+                // 컨트롤 안내 - 하단
+                float controlsY = currentSize.y - 120 * display.scaleFactor;
+                textRenderer.drawText(window, "CONTROLS", "ui", 10, sf::Vector2f(uiX, controlsY), 
+                    sf::Color(100, 100, 120));
+                controlsY += 18 * display.scaleFactor;
                 
                 vector<pair<string, string>> controls = {
                     {"←→", "Move"},
@@ -1012,33 +1186,26 @@ int main() {
                 };
                 
                 for(const auto& control : controls) {
-                    drawStyledText(window, control.first + ": " + control.second, font, 8, 
-                                 {static_cast<float>(uiX), static_cast<float>(controlsY)}, 
-                                 sf::Color(100, 100, 120), false, true);
-                    controlsY += 11;
+                    textRenderer.drawText(window, control.first + ": " + control.second, "ui", 8, 
+                        sf::Vector2f(uiX, controlsY), sf::Color(100, 100, 120));
+                    controlsY += 13 * display.scaleFactor;
                 }
             }
 
-            // 게임 경계선 - 더 멋지게
+            // 게임 경계선
             sf::RectangleShape border;
             border.setFillColor(sf::Color::Transparent);
             border.setOutlineColor(sf::Color(80, 120, 200));
-            border.setOutlineThickness(3);
-            border.setSize(sf::Vector2f(static_cast<float>(COLS * CELL), static_cast<float>(ROWS * CELL)));
-            border.setPosition(0 + shakeOffset.x, 0 + shakeOffset.y);
+            border.setOutlineThickness(3 * display.scaleFactor);
+            border.setSize(sf::Vector2f(display.gameWidth, display.gameHeight));
+            border.setPosition(gameOffset.x + shakeOffset.x, gameOffset.y + shakeOffset.y);
             window.draw(border);
             
-            // 상단에 그라디언트 마스크 (3D 효과)
-            sf::RectangleShape topMask(sf::Vector2f(static_cast<float>(COLS * CELL), 60));
+            // 상단 마스크
+            sf::RectangleShape topMask(sf::Vector2f(display.gameWidth, 60 * display.scaleFactor));
             topMask.setFillColor(sf::Color(12, 12, 20, 150));
-            topMask.setPosition(0 + shakeOffset.x, 0 + shakeOffset.y);
+            topMask.setPosition(gameOffset.x + shakeOffset.x, gameOffset.y + shakeOffset.y);
             window.draw(topMask);
-        }
-
-        // FPS 표시 (디버그용, 선택사항)
-        if(frameCount >= 60) {
-            frameTime = 0;
-            frameCount = 0;
         }
 
         window.display();
